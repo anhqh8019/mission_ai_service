@@ -65,6 +65,11 @@ class Settings:
         "/file_server/videos",
     )
 
+    FILE_SERVER_GEOTIFF_DIR = os.getenv(
+        "FILE_SERVER_GEOTIFF_DIR",
+        "/file_server/geotiff",
+    )
+
     FILE_SERVER_PUBLIC_URL = os.getenv(
         "FILE_SERVER_PUBLIC_URL",
         "http://10.1.53.88:9080",
