@@ -9,7 +9,8 @@ celery_app = Celery(
 
     # QUAN TRỌNG
     include=[
-        "app.tasks"
+        "app.tasks",
+        "app.landcover_tasks",
     ]
 )
 
@@ -33,4 +34,5 @@ celery_app.conf.update(
 
 celery_app.conf.imports = (
     "app.tasks",
+    "app.landcover_tasks",
 )
