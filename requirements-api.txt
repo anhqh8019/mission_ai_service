@@ -9,3 +9,8 @@ boto3
 python-multipart
 pillow
 minio>=7.2,<8
+numpy
+opencv-python-headless
+rasterio
+joblib
+scikit-learn
