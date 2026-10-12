@@ -136,3 +136,24 @@ class RtspInferenceRequest(BaseModel):
     )
 
     generate_annotated_video: bool = False
+
+    
+class LandcoverGeotiffRequest(BaseModel):
+    """Yêu cầu phân loại lớp phủ từ GeoTIFF trên file server dùng chung."""
+
+    mission_id: str = Field(
+        ...,
+        min_length=1,
+        description="Mã mission có model Random Forest đang active.",
+        examples=["mission-landcover"],
+    )
+
+    relative_path: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Đường dẫn tương đối bên dưới FILE_SERVER_GEOTIFF_DIR; "
+            "API không nhận đường dẫn tuyệt đối hoặc URL bên ngoài."
+        ),
+        examples=["input/anh_test.tif"],
+    )
