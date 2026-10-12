@@ -1,0 +1,230 @@
+services:
+
+  redis:
+    image: redis:7
+    container_name: mission-redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: mission-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: uavdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    ports:
+      - "5532:5432"
+
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+
+  minio:
+    image: minio/minio
+
+    container_name: mission-minio
+
+    command:
+      server /data
+      --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+    ports:
+      - "9210:9000"
+      - "9211:9001"
+
+    volumes:
+      - minio_data:/data
+
+
+  mqtt:
+    image: eclipse-mosquitto:2
+
+    container_name: mission-mqtt
+
+    ports:
+      - "1883:1883"
+
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+
+    container_name:
+      mission-api
+
+    ports:
+      - "9202:9001"
+
+
+    environment:
+
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: uavdb
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+
+      REDIS_URL:
+        redis://redis:6379/0
+
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+
+      MINIO_ENDPOINT:
+        http://minio:9000
+
+      MINIO_ACCESS_KEY:
+        minioadmin
+
+      MINIO_SECRET_KEY:
+        minioadmin
+
+      MINIO_BUCKET:
+        inference-results
+
+      MINIO_PUBLIC_ENDPOINT:
+        ${MINIO_PUBLIC_ENDPOINT:-http://10.1.53.88:9210}
+
+      FILE_SERVER_PUBLIC_URL:
+        ${FILE_SERVER_PUBLIC_URL:-http://10.1.53.88:9080}
+
+      FILE_SERVER_GEOTIFF_DIR:
+        /file_server/geotiff
+
+    volumes:
+      - mission_uploads:/shared/uploads
+      - ./app/models:/app/models:ro
+      - ${FILE_SERVER_HOST_DIR:-/home/u01/hoanganh/file_server_test}:/file_server
+
+    depends_on:
+      - redis
+      - postgres
+      - minio
+      - mqtt
+
+
+  gpu-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+
+    container_name:
+      mission-gpu-worker
+
+    environment:
+
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: uavdb
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+
+      REDIS_URL:
+        redis://redis:6379/0
+
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+
+      MINIO_ENDPOINT:
+        http://minio:9000
+
+      MINIO_ACCESS_KEY:
+        minioadmin
+
+      MINIO_SECRET_KEY:
+        minioadmin
+
+      MINIO_BUCKET:
+        inference-results
+
+      MINIO_PUBLIC_ENDPOINT:
+        ${MINIO_PUBLIC_ENDPOINT:-http://10.1.53.88:9210}
+
+      FILE_SERVER_PUBLIC_URL:
+        ${FILE_SERVER_PUBLIC_URL:-http://10.1.53.88:9080}
+
+      FILE_SERVER_GEOTIFF_DIR:
+        /file_server/geotiff
+
+    volumes:
+      - mission_uploads:/shared/uploads
+      - ./app/models:/app/models:ro
+      - ${FILE_SERVER_HOST_DIR:-/home/u01/hoanganh/file_server_test}:/file_server
+
+    depends_on:
+      - redis
+      - postgres
+      - minio
+      - mqtt
+
+
+  landcover-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+
+    container_name:
+      mission-landcover-worker
+
+    restart: unless-stopped
+
+    command:
+      - celery
+      - -A
+      - app.celery_app.celery_app
+      - worker
+      - --loglevel=INFO
+      - --queues=landcover
+      - --concurrency=1
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: uavdb
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+
+      REDIS_URL: redis://redis:6379/0
+
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://10.1.53.88:9210}
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: inference-results
+
+      FILE_SERVER_PUBLIC_URL: ${FILE_SERVER_PUBLIC_URL:-http://10.1.53.88:9080}
+      FILE_SERVER_GEOTIFF_DIR: /file_server/geotiff
+
+      OMP_NUM_THREADS: 4
+      OPENBLAS_NUM_THREADS: 4
+      LOKY_MAX_CPU_COUNT: 4
+
+    volumes:
+      - ./app/models:/app/models:ro
+      - ${FILE_SERVER_HOST_DIR:-/home/u01/hoanganh/file_server_test}:/file_server
+
+    depends_on:
+      - redis
+      - postgres
+      - minio
+      - mqtt
+
+
+volumes:
+  pg_data:
+  minio_data:
+  mission_uploads:

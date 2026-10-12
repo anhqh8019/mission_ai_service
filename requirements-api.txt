@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+celery
+redis
+psycopg2-binary
+requests
+paho-mqtt
+boto3
+python-multipart
+pillow
+minio>=7.2,<8
