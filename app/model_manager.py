@@ -44,6 +44,16 @@ class ModelManager:
                 flush=True
             )
 
+            # Import lười để API có thể khởi động mà không phải nạp
+            # toàn bộ Ultralytics/PyTorch. GPU worker vẫn cài dependency này.
+            try:
+                from ultralytics import YOLO
+            except ImportError as error:
+                raise RuntimeError(
+                    "Suy luận YOLO trực tiếp không khả dụng trong API nhẹ; "
+                    "hãy gửi tác vụ qua gpu-worker."
+                ) from error
+
             model = YOLO(
                 model_path
             )
