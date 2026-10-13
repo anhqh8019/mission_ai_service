@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import uuid
+from pathlib import Path
 
 import requests
 from fastapi import (
@@ -40,6 +41,7 @@ from .tasks import (
     process_videos_minio_multi,
     process_rtsp_stream,
 )
+from .landcover_inputs import InputTooLarge, save_chunks
 from .landcover_tasks import process_landcover_geotiff
 from .landcover_inference import (
     build_public_geotiff_url,
@@ -841,70 +843,80 @@ def inference_image_url(
 
 
 # ============================================================
-# LAND COVER RANDOM FOREST - FILE SERVER PATH (NO UPLOAD)
+# LAND COVER RANDOM FOREST - PATH, PUBLIC URL OR UPLOAD
 # ============================================================
 
-@app.post(
-    "/api/inference/landcover/geotiff",
-    status_code=202,
-)
-def inference_landcover_geotiff(
-    request: LandcoverGeotiffRequest,
-):
-    mission = resolve_mission(request.mission_id)
-
-    # API và worker cùng mount FILE_SERVER_GEOTIFF_DIR. Chỉ nhận relative_path
-    # để tránh đọc tùy ý file trên host hoặc SSRF qua URL bên ngoài.
+def queue_landcover(mission, mission_id, relative_path, input_type, input_url=None):
+    job_id = str(uuid.uuid4())
+    source_url = input_url or build_public_geotiff_url(relative_path)
+    create_job(
+        job_id=job_id, mission_id=mission["mission_uuid"],
+        model_name=mission["model_name"], model_version=mission["model_version"],
+        input_type=input_type, input_url=source_url,
+    )
     try:
-        resolve_geotiff_source(
-            request.relative_path,
-            must_exist=True,
-        )
+        process_landcover_geotiff.apply_async(kwargs={
+            "job_id": job_id, "mission_id": mission["mission_uuid"],
+            "model_name": mission["model_name"], "model_version": mission["model_version"],
+            "model_path": mission["model_path"], "relative_path": relative_path,
+            "input_url": input_url, "input_type": input_type,
+        }, queue="landcover")
+    except Exception as error:
+        from .database import mark_failed
+        mark_failed(job_id, error)
+        raise HTTPException(status_code=503, detail="Không thể đưa job vào hàng đợi") from error
+    return {
+        "job_id": job_id, "status": "queued", "input_type": input_type,
+        "mission_id": mission_id,
+        "source": {"relative_path": relative_path, "url": source_url},
+        "model": {"name": mission["model_name"], "version": mission["model_version"]},
+        "status_url": f"/api/inference/jobs/{job_id}",
+        "result_url": f"/api/inference/jobs/{job_id}/result",
+    }
+
+
+@app.post("/api/inference/landcover/geotiff", status_code=202)
+def inference_landcover_geotiff(request: LandcoverGeotiffRequest):
+    mission = resolve_mission(request.mission_id)
+    if request.input_url is not None:
+        relative_path = f"input/downloads/{uuid.uuid4()}.tif"
+        return queue_landcover(mission, request.mission_id, relative_path,
+                              "LANDCOVER_GEOTIFF_URL", str(request.input_url))
+    try:
+        resolve_geotiff_source(request.relative_path, must_exist=True)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    return queue_landcover(mission, request.mission_id, request.relative_path,
+                          "LANDCOVER_GEOTIFF_PATH")
 
-    source_url = build_public_geotiff_url(request.relative_path)
-    job_id = str(uuid.uuid4())
 
-    create_job(
-        job_id=job_id,
-        mission_id=mission["mission_uuid"],
-        model_name=mission["model_name"],
-        model_version=mission["model_version"],
-        input_type="LANDCOVER_GEOTIFF_PATH",
-        input_url=source_url,
-    )
-
-    process_landcover_geotiff.apply_async(
-        kwargs={
-            "job_id": job_id,
-            "mission_id": mission["mission_uuid"],
-            "model_name": mission["model_name"],
-            "model_version": mission["model_version"],
-            "model_path": mission["model_path"],
-            "relative_path": request.relative_path,
-        },
-        queue="landcover",
-    )
-
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "input_type": "LANDCOVER_GEOTIFF_PATH",
-        "mission_id": request.mission_id,
-        "source": {
-            "relative_path": request.relative_path,
-            "url": source_url,
-        },
-        "model": {
-            "name": mission["model_name"],
-            "version": mission["model_version"],
-        },
-        "status_url": f"/api/inference/jobs/{job_id}",
-        "result_url": f"/api/inference/jobs/{job_id}/result",
-    }
+@app.post("/api/inference/landcover/geotiff/upload", status_code=202)
+def inference_landcover_geotiff_upload(
+    mission_id: str = Form(..., min_length=1),
+    file: UploadFile = File(...),
+):
+    destination = None
+    try:
+        mission = resolve_mission(mission_id)
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".tif", ".tiff"}:
+            raise HTTPException(status_code=400, detail="Chỉ hỗ trợ file .tif hoặc .tiff")
+        relative_path = f"input/uploads/{uuid.uuid4()}{suffix}"
+        destination = resolve_geotiff_source(relative_path, must_exist=False)
+        save_chunks(iter(lambda: file.file.read(1024 * 1024), b""), destination)
+        return queue_landcover(mission, mission_id, relative_path, "LANDCOVER_GEOTIFF_UPLOAD")
+    except InputTooLarge as error:
+        raise HTTPException(status_code=413, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception:
+        if destination is not None:
+            destination.unlink(missing_ok=True)
+        raise
+    finally:
+        file.file.close()
 
 
 # ============================================================
@@ -1055,7 +1067,11 @@ def get_inference_result(
     # ========================================================
     # LAND COVER GEOTIFF
     # ========================================================
-    if input_type == "LANDCOVER_GEOTIFF_PATH":
+    if input_type in {
+        "LANDCOVER_GEOTIFF_PATH",
+        "LANDCOVER_GEOTIFF_URL",
+        "LANDCOVER_GEOTIFF_UPLOAD",
+    }:
         # Kết quả land-cover đã là summary nhỏ, không cần flatten/pagination
         # như kết quả detection theo frame của YOLO.
         return result_data

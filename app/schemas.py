@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, model_validator
 
 
 class InferenceInput(BaseModel):
@@ -148,12 +148,23 @@ class LandcoverGeotiffRequest(BaseModel):
         examples=["mission-landcover"],
     )
 
-    relative_path: str = Field(
-        ...,
+    relative_path: str | None = Field(
+        default=None,
         min_length=1,
         description=(
             "Đường dẫn tương đối bên dưới FILE_SERVER_GEOTIFF_DIR; "
-            "API không nhận đường dẫn tuyệt đối hoặc URL bên ngoài."
+            "Không nhận đường dẫn tuyệt đối."
         ),
         examples=["input/anh_test.tif"],
     )
+
+    input_url: HttpUrl | None = Field(
+        default=None,
+        description="URL HTTP/HTTPS public của GeoTIFF; chọn input_url hoặc relative_path.",
+    )
+
+    @model_validator(mode="after")
+    def check_source(self):
+        if (self.relative_path is None) == (self.input_url is None):
+            raise ValueError("Cần đúng một trong relative_path hoặc input_url")
+        return self
