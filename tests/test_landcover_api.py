@@ -40,3 +40,22 @@ class ApiTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 503)
                 failed.assert_called_once()
             self.assertEqual(before, set((Path(folder)/"input/uploads").glob("*.tif")))
+
+    def test_result_preserves_landcover_payload_for_every_source(self):
+        client = TestClient(app)
+        for input_type in ("LANDCOVER_GEOTIFF_PATH", "LANDCOVER_GEOTIFF_URL", "LANDCOVER_GEOTIFF_UPLOAD"):
+            with self.subTest(input_type=input_type):
+                payload = {
+                    "job_id": "job", "status": "completed", "input_type": input_type,
+                    "input": {"relative_path": "input/test.tif", "crs": "EPSG:4326"},
+                    "output": {"url": "https://example.com/prediction.tif"},
+                    "summary": {"valid_pixel_count": 100, "window_count": 1,
+                                "statistics": [{"class_id": 1, "class_name": "rung", "pixels": 100,
+                                                "percent": 100.0, "area_hectares": None}],
+                                "area_warning": "Geographic CRS"},
+                }
+                with patch("app.main.get_job", return_value={"status": "completed"}), patch("app.main.get_json_from_minio", return_value=payload) as read:
+                    response = client.get("/api/inference/jobs/job/result")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), payload)
+                read.assert_called_once_with("inference/job/result.json")

@@ -1067,7 +1067,11 @@ def get_inference_result(
     # ========================================================
     # LAND COVER GEOTIFF
     # ========================================================
-    if input_type == "LANDCOVER_GEOTIFF_PATH":
+    if input_type in {
+        "LANDCOVER_GEOTIFF_PATH",
+        "LANDCOVER_GEOTIFF_URL",
+        "LANDCOVER_GEOTIFF_UPLOAD",
+    }:
         # Kết quả land-cover đã là summary nhỏ, không cần flatten/pagination
         # như kết quả detection theo frame của YOLO.
         return result_data
