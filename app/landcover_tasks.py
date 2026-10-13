@@ -11,6 +11,7 @@ from .landcover_inference import (
     predict_geotiff,
     resolve_geotiff_source,
 )
+from .landcover_inputs import download_geotiff
 from .mqtt_client import publish
 from .storage import upload_json
 
@@ -28,9 +29,11 @@ def process_landcover_geotiff(
     model_version: str,
     model_path: str,
     relative_path: str,
+    input_url: str | None = None,
+    input_type: str = "LANDCOVER_GEOTIFF_PATH",
 ):
     try:
-        source_path = resolve_geotiff_source(relative_path, must_exist=True)
+        source_path = resolve_geotiff_source(relative_path, must_exist=not bool(input_url))
         output_path, output_relative_path = create_output_path(job_id)
 
         mark_running(job_id)
@@ -41,7 +44,7 @@ def process_landcover_geotiff(
                 "job_id": job_id,
                 "mission_id": mission_id,
                 "status": "running",
-                "input_type": "LANDCOVER_GEOTIFF_PATH",
+                "input_type": input_type,
                 "model_name": model_name,
                 "model_version": model_version,
             },
@@ -65,6 +68,9 @@ def process_landcover_geotiff(
                 },
             )
 
+        if input_url:
+            download_geotiff(input_url, source_path)
+
         summary = predict_geotiff(
             source_path=source_path,
             output_path=output_path,
@@ -78,7 +84,7 @@ def process_landcover_geotiff(
         result_data = {
             "job_id": job_id,
             "status": "completed",
-            "input_type": "LANDCOVER_GEOTIFF_PATH",
+            "input_type": input_type,
             "mission_id": mission_id,
             "model": {
                 "name": model_name,
@@ -86,6 +92,7 @@ def process_landcover_geotiff(
                 "path": model_path,
             },
             "input": {
+                "original_url": input_url,
                 "relative_path": relative_path,
                 "url": source_url,
                 "width": summary["width"],
@@ -129,7 +136,7 @@ def process_landcover_geotiff(
                 "job_id": job_id,
                 "mission_id": mission_id,
                 "status": "completed",
-                "input_type": "LANDCOVER_GEOTIFF_PATH",
+                "input_type": input_type,
                 "model_name": model_name,
                 "model_version": model_version,
                 "result_url": public_result_url,
@@ -154,7 +161,7 @@ def process_landcover_geotiff(
                     "job_id": job_id,
                     "mission_id": mission_id,
                     "status": "failed",
-                    "input_type": "LANDCOVER_GEOTIFF_PATH",
+                    "input_type": input_type,
                     "error": str(error),
                 },
             )

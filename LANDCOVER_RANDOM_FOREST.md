@@ -2,8 +2,8 @@
 
 ## 1. Luồng xử lý
 
-GeoTIFF không được upload qua API. File được đặt trực tiếp vào file server dùng
-chung, sau đó API chỉ nhận đường dẫn tương đối.
+GeoTIFF có thể đặt trực tiếp vào file server dùng chung, cung cấp URL public,
+hoặc upload qua API. Cả ba cách sử dụng cùng worker và luồng kết quả.
 
 ```text
 Nginx file server/geotiff/input/*.tif
@@ -102,8 +102,8 @@ dùng `/home/u01/hoanganh/file_server_test`.
 
 ```bash
 export FILE_SERVER_HOST_DIR=/home/u01/hoanganh/file_server_test
-export FILE_SERVER_PUBLIC_URL=http://10.1.53.88:9080
-export MINIO_PUBLIC_ENDPOINT=http://10.1.53.88:9210
+export FILE_SERVER_PUBLIC_URL=http://localhost:9080
+export MINIO_PUBLIC_ENDPOINT=http://localhost:9210
 
 docker compose build api gpu-worker landcover-worker
 docker compose up -d api gpu-worker landcover-worker
@@ -114,7 +114,7 @@ docker compose logs -f landcover-worker
 ## 6. Gọi API
 
 ```bash
-curl -X POST "http://10.1.53.88:9202/api/inference/landcover/geotiff" \
+curl -X POST "http://localhost:9202/api/inference/landcover/geotiff" \
   -H "Content-Type: application/json" \
   -d '{
     "mission_id": "LANDCOVER",
@@ -137,19 +137,19 @@ Response HTTP 202:
 Kiểm tra trạng thái:
 
 ```bash
-curl "http://10.1.53.88:9202/api/inference/jobs/JOB_ID"
+curl "http://localhost:9202/api/inference/jobs/JOB_ID"
 ```
 
 Lấy kết quả:
 
 ```bash
-curl "http://10.1.53.88:9202/api/inference/jobs/JOB_ID/result"
+curl "http://localhost:9202/api/inference/jobs/JOB_ID/result"
 ```
 
 GeoTIFF đầu ra:
 
 ```text
-http://10.1.53.88:9080/geotiff/results/JOB_ID/landcover_prediction.tif
+http://localhost:9080/geotiff/results/JOB_ID/landcover_prediction.tif
 ```
 
 ## 7. Kiểm tra band
@@ -180,3 +180,46 @@ requirements.txt            # rasterio, joblib, scikit-learn
 docker-compose.yml          # volume chung và CPU worker riêng
 Dockerfile.worker           # model được mount, không COPY model khi build
 ```
+
+## Public URL and upload inputs
+
+The existing endpoint accepts exactly one of `relative_path` or `input_url`.
+Mission identifiers are mission **codes**, as with the existing path API.
+
+```bash
+curl -X POST http://localhost:9202/api/inference/landcover/geotiff \
+  -H 'Content-Type: application/json' \
+  -d '{"mission_id":"mission-landcover","input_url":"https://example.com/sentinel2.tif"}'
+
+curl -X POST http://localhost:9202/api/inference/landcover/geotiff/upload \
+  -F 'mission_id=mission-landcover' \
+  -F 'file=@/path/to/sentinel2.tif'
+```
+
+Both return HTTP 202 with `job_id`, `status_url`, and `result_url`.
+Public URLs are downloaded by the landcover worker; download/validation errors
+are reported through the existing failed-job status and MQTT event.
+The URL must be accessible without credentials and resolve to public addresses;
+redirects to internal addresses are rejected. Signed URLs are supported, but
+must remain valid until the worker downloads them. Treat stored job URLs as
+sensitive when they contain signed query parameters.
+Uploads must have `.tif`/`.tiff` extensions and contain a TIFF with a CRS.
+They are saved under `input/uploads/<uuid>.tif`; downloads under
+`input/downloads/<uuid>.tif`, using the existing shared file-server mount.
+Band compatibility is still checked by the model's inference pipeline.
+
+Defaults: `GEOTIFF_MAX_BYTES=2147483648` (2 GiB),
+`GEOTIFF_DOWNLOAD_TIMEOUT=120` (read inactivity timeout, seconds).
+Set the size limit on both API and landcover worker; download timeout on worker.
+A reverse proxy must also permit the desired upload body size and duration.
+Source files are retained for inspection; use your existing data-retention policy.
+
+Deploy after merging:
+
+```bash
+git pull
+docker compose up -d --build api landcover-worker
+```
+
+Tests: install `requirements-api.txt` plus `httpx` / `httpx2` (as required by
+your Starlette version), then run `python -m unittest discover -s tests -v`.
